@@ -2,7 +2,10 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#f7f7f7">
 <title>機器貓快跑</title>
 <style>
   :root { --bg:#f7f7f7; --fg:#535353; }
@@ -12,14 +15,50 @@
   canvas { width:100%; max-width:900px; background:#fff; border-radius:10px;
     box-shadow:0 2px 12px rgba(0,0,0,.08); touch-action:manipulation; }
   p { margin:0; font-size:14px; text-align:center; }
+  html,body { overscroll-behavior:none; -webkit-user-select:none; user-select:none;
+    -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent; }
+  body { padding: env(safe-area-inset-top) max(16px, env(safe-area-inset-right))
+    env(safe-area-inset-bottom) max(16px, env(safe-area-inset-left)); }
+  .pad { display:none; width:100%; max-width:900px; gap:14px; }
+  .pad button { flex:1; height:84px; border:0; border-radius:18px; font-size:22px; font-weight:700;
+    color:#fff; touch-action:none; font-family:inherit; box-shadow:0 4px 0 rgba(0,0,0,.15); }
+  .pad button:active, .pad button.on { transform:translateY(3px); box-shadow:0 1px 0 rgba(0,0,0,.15); }
+  #duckBtn { background:#7a8ca3; }
+  #jumpBtn { background:#4fb597; flex:1.6; }
+  .touch-hint { display:none; }
+  @media (pointer:coarse) {
+    .pad { display:flex; }
+    .key-hint { display:none; }
+    .touch-hint { display:block; }
+  }
+  @media (pointer:coarse) and (orientation:landscape) and (max-height:500px) {
+    body { flex-direction:row; flex-wrap:wrap; gap:8px; }
+    canvas { max-height:calc(100vh - 110px); width:auto; max-width:100%; }
+    .pad button { height:72px; }
+    .touch-hint { display:none; }
+  }
 </style>
 </head>
 <body>
 <canvas id="c" width="900" height="300"></canvas>
-<p>空白鍵 / ↑ / 點擊畫面：跳躍　|　↓：蹲下　|　撞到就重來</p>
+<div class="pad">
+  <button id="duckBtn" aria-label="蹲下">▼ 蹲</button>
+  <button id="jumpBtn" aria-label="跳躍">▲ 跳</button>
+</div>
+<p class="key-hint">空白鍵 / ↑ / 點擊畫面：跳躍　|　↓：蹲下　|　撞到就重來</p>
+<p class="touch-hint">點畫面或按「跳」跳躍，按住「蹲」蹲下・橫放手機畫面更大</p>
 <script>
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
-const W = cv.width, H = cv.height, GROUND = 250;
+let W = cv.width, H = cv.height, GROUND = 250;
+// narrower, taller playfield on portrait phones so the cat isn't tiny
+function fit() {
+  const portrait = matchMedia('(pointer:coarse)').matches && innerHeight > innerWidth;
+  const newW = portrait ? 560 : 900, newH = portrait ? 420 : 300, newG = newH - 50, dy = newG - GROUND;
+  if (newH === H && newW === W) return;
+  cv.width = W = newW; cv.height = H = newH; GROUND = newG;
+  if (cat) { cat.y += dy; obs.forEach(o => o.y += dy); }
+}
+addEventListener('resize', fit);
 let hi = 0; try { hi = +localStorage.getItem('robotCatHi') || 0; } catch(e) {}
 
 let state, cat, obs, clouds, speed, score, spawnT, t, frame;
@@ -28,7 +67,7 @@ function reset() {
   obs = []; clouds = [{x:300,y:60},{x:650,y:95}];
   speed = 6; score = 0; spawnT = 60; t = 0; frame = 0;
 }
-reset(); state = 'ready';
+fit(); reset(); state = 'ready';
 
 // ---------- input ----------
 function jump() {
@@ -41,6 +80,18 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => { if (['ArrowDown','KeyS'].includes(e.code)) cat.duck = false; });
 cv.addEventListener('pointerdown', e => { e.preventDefault(); jump(); });
+const jumpBtn = document.getElementById('jumpBtn'), duckBtn = document.getElementById('duckBtn');
+jumpBtn.addEventListener('pointerdown', e => { e.preventDefault(); jump(); buzz(10); });
+const duckOn = e => { e.preventDefault(); duckBtn.classList.add('on'); cat.duck = true; if (!cat.onGround) cat.vy += 4; };
+const duckOff = e => { duckBtn.classList.remove('on'); cat.duck = false; };
+duckBtn.addEventListener('pointerdown', duckOn);
+['pointerup','pointercancel','pointerleave'].forEach(ev => duckBtn.addEventListener(ev, duckOff));
+// block long-press menu and double-tap zoom on phones
+addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('touchmove', e => e.preventDefault(), { passive:false });
+let lastTap = 0;
+document.addEventListener('touchend', e => { const n = Date.now(); if (n - lastTap < 300) e.preventDefault(); lastTap = n; }, { passive:false });
+function buzz(ms) { try { navigator.vibrate && navigator.vibrate(ms); } catch(e) {} }
 
 // ---------- original character: "Milu" the mint robot cat ----------
 function drawCat(x, y, duck, dead) {
@@ -149,7 +200,7 @@ function update() {
   const h = cat.duck && cat.onGround ? cat.h * 0.65 : cat.h;
   const box = { x:cat.x, y:cat.y - h, w:cat.w, h };
   if (obs.some(o => hit(box, o))) {
-    state = 'over';
+    state = 'over'; buzz(120);
     if (score > hi) { hi = Math.floor(score); try { localStorage.setItem('robotCatHi', hi); } catch(e) {} }
   }
 }
@@ -174,21 +225,22 @@ function draw() {
   const pad = n => String(Math.floor(n)).padStart(5, '0');
   ctx.fillText(`HI ${pad(hi)}  ${pad(score)}`, W - 20, 32);
   ctx.textAlign = 'center';
+  const my = GROUND - 140, touch = matchMedia('(pointer:coarse)').matches;
   if (state === 'ready') {
-    ctx.font = 'bold 26px "Microsoft JhengHei", sans-serif';
-    ctx.fillText('機器貓咪嚕快跑！', W/2, 110);
-    ctx.font = '16px "Microsoft JhengHei", sans-serif';
-    ctx.fillText('按空白鍵或點擊開始', W/2, 140);
+    ctx.font = 'bold 30px "Microsoft JhengHei", sans-serif';
+    ctx.fillText('機器貓咪嚕快跑！', W/2, my);
+    ctx.font = '20px "Microsoft JhengHei", sans-serif';
+    ctx.fillText(touch ? '點一下開始' : '按空白鍵或點擊開始', W/2, my + 34);
   } else if (state === 'over') {
-    ctx.font = 'bold 28px Consolas, monospace';
-    ctx.fillText('G A M E  O V E R', W/2, 110);
-    ctx.font = '16px "Microsoft JhengHei", sans-serif';
-    ctx.fillText('按空白鍵或點擊重新開始', W/2, 140);
+    ctx.font = 'bold 32px Consolas, monospace';
+    ctx.fillText('G A M E  O V E R', W/2, my);
+    ctx.font = '20px "Microsoft JhengHei", sans-serif';
+    ctx.fillText(touch ? '點一下重新開始' : '按空白鍵或點擊重新開始', W/2, my + 34);
   }
   ctx.textAlign = 'left';
 }
 
-(function loop(){ update(); draw(); requestAnimationFrame(loop); })();
+(function loop(){ fit(); update(); draw(); requestAnimationFrame(loop); })();
 </script>
 </body>
 </html>
