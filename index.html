@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>機器貓快跑</title>
+<style>
+  :root { --bg:#f7f7f7; --fg:#535353; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font-family: "Segoe UI","Microsoft JhengHei",sans-serif; }
+  body { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; padding:0 16px; box-sizing:border-box; }
+  canvas { width:100%; max-width:900px; background:#fff; border-radius:10px;
+    box-shadow:0 2px 12px rgba(0,0,0,.08); touch-action:manipulation; }
+  p { margin:0; font-size:14px; text-align:center; }
+</style>
+</head>
+<body>
+<canvas id="c" width="900" height="300"></canvas>
+<p>空白鍵 / ↑ / 點擊畫面：跳躍　|　↓：蹲下　|　撞到就重來</p>
+<script>
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height, GROUND = 250;
+let hi = 0; try { hi = +localStorage.getItem('robotCatHi') || 0; } catch(e) {}
+
+let state, cat, obs, clouds, speed, score, spawnT, t, frame;
+function reset() {
+  cat = { x:70, y:GROUND, vy:0, w:46, h:52, duck:false, onGround:true };
+  obs = []; clouds = [{x:300,y:60},{x:650,y:95}];
+  speed = 6; score = 0; spawnT = 60; t = 0; frame = 0;
+}
+reset(); state = 'ready';
+
+// ---------- input ----------
+function jump() {
+  if (state !== 'play') { if (state === 'over') reset(); state = 'play'; return; }
+  if (cat.onGround) { cat.vy = -13.5; cat.onGround = false; }
+}
+addEventListener('keydown', e => {
+  if (['Space','ArrowUp','KeyW'].includes(e.code)) { e.preventDefault(); jump(); }
+  if (['ArrowDown','KeyS'].includes(e.code)) { e.preventDefault(); cat.duck = true; if (!cat.onGround) cat.vy += 4; }
+});
+addEventListener('keyup', e => { if (['ArrowDown','KeyS'].includes(e.code)) cat.duck = false; });
+cv.addEventListener('pointerdown', e => { e.preventDefault(); jump(); });
+
+// ---------- original character: "Milu" the mint robot cat ----------
+function drawCat(x, y, duck, dead) {
+  const run = cat.onGround && state === 'play' ? Math.floor(frame / 6) % 2 : 0;
+  ctx.save();
+  ctx.translate(x, y);
+  const squash = duck ? 0.7 : 1;
+  ctx.scale(1, squash);
+  // legs (wheels-ish feet)
+  ctx.fillStyle = '#3d5a5a';
+  ctx.fillRect(8,  -10 + (run ? -3 : 0), 10, 10);
+  ctx.fillRect(28, -10 + (run ? 0 : -3), 10, 10);
+  // body: rounded square, mint green
+  ctx.fillStyle = '#6fd3b5';
+  roundRect(0, -46, 46, 38, 12); ctx.fill();
+  // belly panel
+  ctx.fillStyle = '#e8fff7';
+  roundRect(10, -32, 26, 18, 6); ctx.fill();
+  // bolt on belly
+  ctx.fillStyle = '#ffb347';
+  ctx.beginPath(); ctx.moveTo(25,-30); ctx.lineTo(18,-22); ctx.lineTo(23,-22);
+  ctx.lineTo(20,-15); ctx.lineTo(28,-24); ctx.lineTo(23,-24); ctx.closePath(); ctx.fill();
+  // triangular metal ears
+  ctx.fillStyle = '#4fb597';
+  ctx.beginPath(); ctx.moveTo(4,-44); ctx.lineTo(10,-58); ctx.lineTo(18,-44); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(28,-44); ctx.lineTo(36,-58); ctx.lineTo(42,-44); ctx.fill();
+  // antenna
+  ctx.strokeStyle = '#3d5a5a'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(23,-46); ctx.lineTo(23,-60); ctx.stroke();
+  ctx.fillStyle = '#ff6b6b'; ctx.beginPath(); ctx.arc(23,-62,4,0,7); ctx.fill();
+  // single visor eye
+  ctx.fillStyle = '#26364a';
+  roundRect(12, -42, 30, 10, 5); ctx.fill();
+  ctx.fillStyle = dead ? '#ff6b6b' : '#7ef9ff';
+  if (dead) { ctx.font = 'bold 10px sans-serif'; ctx.fillText('x  x', 17, -34); }
+  else { ctx.fillRect(30, -40, 8, 6); }
+  // tail (curly cable)
+  ctx.strokeStyle = '#4fb597'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(0,-20); ctx.quadraticCurveTo(-12,-24 - run*4,-8,-36); ctx.stroke();
+  ctx.restore();
+}
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+
+// ---------- obstacles ----------
+function spawn() {
+  const r = Math.random();
+  if (score > 300 && r < 0.25) {
+    // flying drone
+    const lvl = [GROUND - 28, GROUND - 60, GROUND - 95][Math.floor(Math.random()*3)];
+    obs.push({ type:'drone', x:W+20, y:lvl, w:44, h:22 });
+  } else {
+    // stack of traffic cones
+    const n = 1 + Math.floor(Math.random() * (score > 500 ? 3 : 2));
+    const big = Math.random() < 0.4;
+    const w = big ? 26 : 20, h = big ? 50 : 36;
+    obs.push({ type:'cone', x:W+20, y:GROUND - h, w:w*n + (n-1)*4, h, n, cw:w });
+  }
+  spawnT = 50 + Math.random() * 60 - Math.min(speed * 2, 20);
+}
+function drawObs(o) {
+  if (o.type === 'cone') {
+    for (let i = 0; i < o.n; i++) {
+      const x = o.x + i * (o.cw + 4);
+      ctx.fillStyle = '#ff8c42';
+      ctx.beginPath(); ctx.moveTo(x + o.cw/2, o.y); ctx.lineTo(x + o.cw, o.y + o.h - 4);
+      ctx.lineTo(x, o.y + o.h - 4); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(x + o.cw*0.28, o.y + o.h*0.45, o.cw*0.44, 5);
+      ctx.fillStyle = '#555'; ctx.fillRect(x - 2, o.y + o.h - 4, o.cw + 4, 4);
+    }
+  } else {
+    const flap = Math.floor(frame / 4) % 2;
+    ctx.fillStyle = '#7a7a8c';
+    roundRect(o.x + 8, o.y + 8, 28, 12, 5); ctx.fill();
+    ctx.fillStyle = '#ff4d4d'; ctx.beginPath(); ctx.arc(o.x + 22, o.y + 14, 3, 0, 7); ctx.fill();
+    ctx.fillStyle = '#444';
+    ctx.fillRect(o.x + (flap ? 0 : 4), o.y + 2, flap ? 18 : 10, 3);
+    ctx.fillRect(o.x + (flap ? 26 : 30), o.y + 2, flap ? 18 : 10, 3);
+    ctx.fillRect(o.x + 9, o.y + 3, 2, 6); ctx.fillRect(o.x + 33, o.y + 3, 2, 6);
+  }
+}
+
+function hit(a, b) {
+  const p = 6;
+  return a.x + p < b.x + b.w && a.x + a.w - p > b.x && a.y + p < b.y + b.h && a.y + a.h - p > b.y;
+}
+
+// ---------- loop ----------
+function update() {
+  frame++;
+  if (state !== 'play') return;
+  t++;
+  speed = Math.min(6 + t / 600, 16);
+  score += speed / 12;
+
+  cat.vy += 0.75; cat.y += cat.vy;
+  if (cat.y >= GROUND) { cat.y = GROUND; cat.vy = 0; cat.onGround = true; }
+
+  if (--spawnT <= 0) spawn();
+  obs.forEach(o => o.x -= speed * (o.type === 'drone' ? 1.1 : 1));
+  obs = obs.filter(o => o.x + o.w > -10);
+
+  clouds.forEach(c => { c.x -= speed * 0.2; if (c.x < -80) { c.x = W + Math.random()*200; c.y = 40 + Math.random()*70; } });
+
+  const h = cat.duck && cat.onGround ? cat.h * 0.65 : cat.h;
+  const box = { x:cat.x, y:cat.y - h, w:cat.w, h };
+  if (obs.some(o => hit(box, o))) {
+    state = 'over';
+    if (score > hi) { hi = Math.floor(score); try { localStorage.setItem('robotCatHi', hi); } catch(e) {} }
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  // clouds
+  ctx.fillStyle = '#e6e6e6';
+  clouds.forEach(c => { ctx.beginPath(); ctx.arc(c.x, c.y, 14, 0, 7); ctx.arc(c.x+18, c.y-6, 18, 0, 7); ctx.arc(c.x+38, c.y, 14, 0, 7); ctx.fill(); });
+  // ground
+  ctx.fillStyle = '#535353'; ctx.fillRect(0, GROUND, W, 2);
+  ctx.fillStyle = '#b5b5b5';
+  for (let i = 0; i < 30; i++) {
+    const gx = ((i * 73 - t * speed) % (W + 40) + W + 40) % (W + 40) - 20;
+    ctx.fillRect(gx, GROUND + 8 + (i % 3) * 7, 6 + (i % 4) * 3, 2);
+  }
+  obs.forEach(drawObs);
+  drawCat(cat.x, cat.y, cat.duck && cat.onGround, state === 'over');
+
+  // score
+  ctx.fillStyle = '#535353'; ctx.font = 'bold 18px Consolas, monospace'; ctx.textAlign = 'right';
+  const pad = n => String(Math.floor(n)).padStart(5, '0');
+  ctx.fillText(`HI ${pad(hi)}  ${pad(score)}`, W - 20, 32);
+  ctx.textAlign = 'center';
+  if (state === 'ready') {
+    ctx.font = 'bold 26px "Microsoft JhengHei", sans-serif';
+    ctx.fillText('機器貓咪嚕快跑！', W/2, 110);
+    ctx.font = '16px "Microsoft JhengHei", sans-serif';
+    ctx.fillText('按空白鍵或點擊開始', W/2, 140);
+  } else if (state === 'over') {
+    ctx.font = 'bold 28px Consolas, monospace';
+    ctx.fillText('G A M E  O V E R', W/2, 110);
+    ctx.font = '16px "Microsoft JhengHei", sans-serif';
+    ctx.fillText('按空白鍵或點擊重新開始', W/2, 140);
+  }
+  ctx.textAlign = 'left';
+}
+
+(function loop(){ update(); draw(); requestAnimationFrame(loop); })();
+</script>
+</body>
+</html>
